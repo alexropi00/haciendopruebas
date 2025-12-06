@@ -203,6 +203,12 @@ get_probs <- function(model, X) {
 # ============================================================================
 main <- function() {
   if (!dir.exists("trained_models")) dir.create("trained_models")
+
+  ens_list <- list(
+    list(n="ens_mlp", t="mlp"),
+    list(n="ens_rf", t="rf"),
+    list(n="ens_svm", t="svm")
+  )
   
   # --- PCA ---
   # Importante: NO cargar los datos en el entorno global antes de llamar al cluster
@@ -228,13 +234,14 @@ main <- function() {
       if(!is.null(p)) meta[, ((i-1)*10+1):((i-1)*10+ncol(p))] <- p
     }
     
-    ens_list <- list(list(n="ens_mlp", t="mlp"), list(n="ens_rf", t="rf"), list(n="ens_svm", t="svm"))
-    for(e in ens_list) {
-      if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, trace=F)
-      if(e$t=="rf") m <- randomForest(meta, y_ens, ntree=50)
-      if(e$t=="svm") m <- svm(meta, y_ens, probability=T)
-      models_pca[[e$n]] <- list(model=m, success=TRUE, type=paste0("ensemble_", e$t))
-      cat(sprintf("✓ %s\n", e$n))
+    if(length(ens_list) > 0) {
+      for(e in ens_list) {
+        if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, trace=F)
+        if(e$t=="rf") m <- randomForest(meta, y_ens, ntree=50)
+        if(e$t=="svm") m <- svm(meta, y_ens, probability=T)
+        models_pca[[e$n]] <- list(model=m, success=TRUE, type=paste0("ensemble_", e$t))
+        cat(sprintf("✓ %s\n", e$n))
+      }
     }
   }
   save(models_pca, file="trained_models/models_pca.RData")
@@ -261,12 +268,14 @@ main <- function() {
       if(!is.null(p)) meta[, ((i-1)*10+1):((i-1)*10+ncol(p))] <- p
     }
     
-    for(e in ens_list) {
-      if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, trace=F)
-      if(e$t=="rf") m <- randomForest(meta, y_ens, ntree=50)
-      if(e$t=="svm") m <- svm(meta, y_ens, probability=T)
-      models_crop[[e$n]] <- list(model=m, success=TRUE, type=paste0("ensemble_", e$t))
-      cat(sprintf("✓ %s\n", e$n))
+    if(length(ens_list) > 0) {
+      for(e in ens_list) {
+        if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, trace=F)
+        if(e$t=="rf") m <- randomForest(meta, y_ens, ntree=50)
+        if(e$t=="svm") m <- svm(meta, y_ens, probability=T)
+        models_crop[[e$n]] <- list(model=m, success=TRUE, type=paste0("ensemble_", e$t))
+        cat(sprintf("✓ %s\n", e$n))
+      }
     }
   }
   save(models_crop, file="trained_models/models_crop_pooling.RData")
