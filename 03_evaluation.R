@@ -48,12 +48,22 @@ compute_confusion_metrics <- function(y_true, y_pred) {
 }
 
 compute_log_loss <- function(probs, y_true) {
+  if (is.null(probs) || length(probs) == 0) {
+    return(NA_real_)
+  }
+
+  # Si llega un vector, convertirlo en matriz para evitar ncol() = NULL.
+  if (is.null(dim(probs))) {
+    probs <- matrix(probs, ncol = ifelse(length(probs) == length(levels(y_true)), length(levels(y_true)), 1))
+  }
+
   probs[is.na(probs)] <- 0
 
   # Asegurar que las columnas del arreglo de probabilidades estén alineadas con
   # los niveles de las etiquetas.
   levels_order <- levels(y_true)
-  if (is.null(colnames(probs))) {
+  current_names <- colnames(probs)
+  if (is.null(current_names) || any(is.na(current_names))) {
     if (ncol(probs) == length(levels_order)) {
       colnames(probs) <- levels_order
     } else {
