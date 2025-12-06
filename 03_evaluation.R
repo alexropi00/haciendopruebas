@@ -60,7 +60,12 @@ compute_log_loss <- function(probs, y_true) {
   probs_aligned <- probs[, levels_order, drop = FALSE]
   probs_clipped <- pmin(pmax(probs_aligned, 1e-15), 1 - 1e-15)
 
-  true_indices <- cbind(seq_along(y_true), as.character(y_true))
+  col_index <- match(y_true, levels_order)
+  if (any(is.na(col_index))) {
+    stop("No se pudieron alinear las etiquetas verdaderas con las columnas de probabilidad")
+  }
+
+  true_indices <- cbind(seq_along(y_true), col_index)
   true_probs <- probs_clipped[true_indices]
 
   -mean(log(true_probs))
