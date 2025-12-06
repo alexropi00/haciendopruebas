@@ -101,8 +101,11 @@ get_probabilities <- function(model, X) {
   }
 
   if (inherits(model, "randomForest")) {
-    p <- predict(model, X, type = "prob")
-    return(as.matrix(p))
+    if (!is.null(model$type) && model$type == "classification") {
+      p <- tryCatch(predict(model, X, type = "prob"), error = function(e) NULL)
+      if (!is.null(p)) return(as.matrix(p))
+    }
+    return(NULL)
   }
 
   NULL
