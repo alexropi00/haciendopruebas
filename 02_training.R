@@ -86,7 +86,10 @@ worker_wrapper <- function(job) {
   
   tryCatch({
     if (config$type == "mlp") {
-      model <- nnet(x = X_sub, y = y_sub, size = config$hidden, maxit = config$max_iter, 
+      if (!is.numeric(config$hidden) || length(config$hidden) != 1) {
+        stop("config$hidden debe ser un valor numérico escalar para 'nnet'.")
+      }
+      model <- nnet(x = X_sub, y = y_sub, size = config$hidden, maxit = config$max_iter,
                     decay = config$decay, MaxNWts = 50000, trace = FALSE)
     } else if (config$type == "svm") {
       if (is.null(config$gamma)) {
@@ -129,7 +132,7 @@ run_parallel_training <- function(dataset_name, dataset_path) {
     list(type = "mlp", name = "mlp_small", hidden = 40, decay = 0.001, max_iter = MLP_MAX_ITER),
     list(type = "mlp", name = "mlp_medium", hidden = 60, decay = 0.001, max_iter = MLP_MAX_ITER),
     list(type = "mlp", name = "mlp_large", hidden = 80, decay = 0.001, max_iter = MLP_MAX_ITER),
-    list(type = "mlp", name = "mlp_deep", hidden = c(50, 25), decay = 0.001, max_iter = MLP_MAX_ITER),
+    list(type = "mlp", name = "mlp_deep", hidden = 100, decay = 0.001, max_iter = MLP_MAX_ITER),
     list(type = "svm", name = "svm_rad_01", kernel = "radial", cost = 0.1, gamma = NULL),
     list(type = "svm", name = "svm_rad_1", kernel = "radial", cost = 1, gamma = NULL),
     list(type = "svm", name = "svm_rad_5", kernel = "radial", cost = 5, gamma = NULL),
