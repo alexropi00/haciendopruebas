@@ -140,18 +140,24 @@ prepare_prob_matrix <- function(probs, levels_order, n_rows) {
     return(matrix(0, nrow = n_rows, ncol = length(levels_order)))
   }
 
+  # Convertir vectores a matriz para garantizar que ncol() devuelva un escalar.
+  if (is.null(dim(probs))) {
+    probs <- matrix(probs, nrow = n_rows, ncol = ifelse(length(probs) == length(levels_order), length(levels_order), 1))
+  }
+
   prob_names <- colnames(probs)
+  n_cols <- ncol(probs)
   if ((is.null(prob_names) || isTRUE(any(is.na(prob_names)))) &&
-      ncol(probs) == length(levels_order)) {
+      !is.null(n_cols) && n_cols == length(levels_order)) {
     colnames(probs) <- levels_order
   }
 
   missing_cols <- setdiff(levels_order, colnames(probs))
-  if (length(missing_cols) > 0 || ncol(probs) != length(levels_order)) {
+  if (length(missing_cols) > 0 || is.null(n_cols) || n_cols != length(levels_order)) {
     warning(
       sprintf(
-        "No se pudieron alinear las probabilidades para el meta-modelo: se esperaban %d columnas y se recibieron %d.",
-        length(levels_order), ncol(probs)
+        "No se pudieron alinear las probabilidades para el meta-modelo: se esperaban %d columnas y se recibieron %s.",
+        length(levels_order), ifelse(is.null(n_cols), "desconocidas", n_cols)
       )
     )
     return(matrix(0, nrow = nrow(probs), ncol = length(levels_order)))
@@ -184,9 +190,14 @@ build_meta_features <- function(models, X, levels_order, max_base_models = 5) {
 predict_labels <- function(model, X, levels_order) {
   probs <- get_probabilities(model, X)
   if (!is.null(probs)) {
+    if (is.null(dim(probs))) {
+      probs <- matrix(probs, nrow = nrow(X), ncol = ifelse(length(probs) == length(levels_order), length(levels_order), 1))
+    }
+
     prob_names <- colnames(probs)
+    n_cols <- ncol(probs)
     if ((is.null(prob_names) || isTRUE(any(is.na(prob_names)))) &&
-        ncol(probs) == length(levels_order)) {
+        !is.null(n_cols) && n_cols == length(levels_order)) {
       colnames(probs) <- levels_order
     }
 
