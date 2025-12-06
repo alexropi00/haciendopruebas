@@ -252,7 +252,7 @@ main <- function(subset_percentage = SUBSET_PERCENTAGE) {
     
     if(length(ens_list) > 0) {
       for(e in ens_list) {
-        if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, trace=F)
+        if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, MaxNWts=50000, trace=F)
         if(e$t=="rf") m <- randomForest(meta, y_ens, ntree=50)
         if(e$t=="svm") m <- svm(meta, y_ens, probability=T)
         models_pca[[e$n]] <- list(model=m, success=TRUE, type=paste0("ensemble_", e$t))
@@ -286,7 +286,7 @@ main <- function(subset_percentage = SUBSET_PERCENTAGE) {
     
     if(length(ens_list) > 0) {
       for(e in ens_list) {
-        if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, trace=F)
+        if(e$t=="mlp") m <- nnet(meta, y_ens, size=30, maxit=200, MaxNWts=50000, trace=F)
         if(e$t=="rf") m <- randomForest(meta, y_ens, ntree=50)
         if(e$t=="svm") m <- svm(meta, y_ens, probability=T)
         models_crop[[e$n]] <- list(model=m, success=TRUE, type=paste0("ensemble_", e$t))
