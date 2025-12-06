@@ -46,15 +46,28 @@ compute_log_loss <- function(probs, y_true) {
   # los niveles de las etiquetas.
   levels_order <- levels(y_true)
   if (is.null(colnames(probs))) {
-    if (ncol(probs) != length(levels_order)) {
-      stop("No se pueden alinear las probabilidades sin nombres de columna válidos")
+    if (ncol(probs) == length(levels_order)) {
+      colnames(probs) <- levels_order
+    } else {
+      warning(
+        sprintf(
+          "No se pueden alinear las probabilidades: se esperaban %d columnas y se recibieron %d.",
+          length(levels_order), ncol(probs)
+        )
+      )
+      return(NA_real_)
     }
-    colnames(probs) <- levels_order
   }
 
   missing_cols <- setdiff(levels_order, colnames(probs))
   if (length(missing_cols) > 0) {
-    stop("Faltan probabilidades para algunas clases en la predicción: ", paste(missing_cols, collapse = ", "))
+    warning(
+      sprintf(
+        "Faltan probabilidades para algunas clases en la predicción: %s",
+        paste(missing_cols, collapse = ", ")
+      )
+    )
+    return(NA_real_)
   }
 
   probs_aligned <- probs[, levels_order, drop = FALSE]
@@ -62,7 +75,8 @@ compute_log_loss <- function(probs, y_true) {
 
   col_index <- match(y_true, levels_order)
   if (any(is.na(col_index))) {
-    stop("No se pudieron alinear las etiquetas verdaderas con las columnas de probabilidad")
+    warning("No se pudieron alinear las etiquetas verdaderas con las columnas de probabilidad")
+    return(NA_real_)
   }
 
   true_indices <- cbind(seq_along(y_true), col_index)
