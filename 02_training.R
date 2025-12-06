@@ -159,7 +159,9 @@ run_parallel_training <- function(dataset_name, dataset_path, subset_percentage 
   })
   
   # Iniciar Cluster
-  n_cores_use <- min(MAX_CORES, detectCores() - 1)
+  detected_cores <- detectCores()
+  n_cores_use <- min(MAX_CORES, max(1, detected_cores - 1))
+  cat(sprintf("Detectados %d núcleos, usando %d para clusterApplyLB\n", detected_cores, n_cores_use))
   cl <- makeCluster(n_cores_use, outfile = "")
   on.exit(stopCluster(cl))
   
