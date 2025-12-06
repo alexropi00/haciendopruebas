@@ -68,10 +68,15 @@ worker_wrapper <- function(job) {
   
   # Muestreo estratificado (rápido)
   # Usamos índices para no duplicar memoria innecesariamente
+  subset_percentage <- job$subset_percentage
+  if (!(subset_percentage > 0 && subset_percentage <= 1)) {
+    stop(sprintf("subset_percentage debe estar en el rango (0, 1]; valor recibido: %.3f", subset_percentage))
+  }
+
   train_idx <- c()
   for (cls in unique(cache$y)) {
     c_idx <- which(cache$y == cls)
-    n <- max(2, floor(length(c_idx) * 0.40)) # 40% subset
+    n <- max(2, floor(length(c_idx) * subset_percentage))
     train_idx <- c(train_idx, sample(c_idx, n))
   }
   
@@ -119,7 +124,11 @@ environment(worker_wrapper) <- new.env()
 # ============================================================================
 # GESTOR DE PARALELISMO
 # ============================================================================
-run_parallel_training <- function(dataset_name, dataset_path) {
+run_parallel_training <- function(dataset_name, dataset_path, subset_percentage = SUBSET_PERCENTAGE) {
+
+  if (!(subset_percentage > 0 && subset_percentage <= 1)) {
+    stop(sprintf("SUBSET_PERCENTAGE debe estar en el rango (0, 1]; valor recibido: %.3f", subset_percentage))
+  }
   
   cat(sprintf("\n>>> PROCESANDO: %s <<<\n", toupper(dataset_name)))
   
@@ -144,7 +153,8 @@ run_parallel_training <- function(dataset_name, dataset_path) {
       seed = i * 1000,
       dataset_path = dataset_path,
       dataset_type = dataset_name,
-      temp_dir = TEMP_DIR
+      temp_dir = TEMP_DIR,
+      subset_percentage = subset_percentage
     )
   })
   
@@ -201,7 +211,7 @@ get_probs <- function(model, X) {
 # ============================================================================
 # MAIN
 # ============================================================================
-main <- function() {
+main <- function(subset_percentage = SUBSET_PERCENTAGE) {
   if (!dir.exists("trained_models")) dir.create("trained_models")
 
   ens_list <- list(
@@ -214,7 +224,7 @@ main <- function() {
   # Importante: NO cargar los datos en el entorno global antes de llamar al cluster
   # Dejar que los workers lo hagan.
   
-  models_pca <- run_parallel_training("pca", "processed_data/mnist_pca.RData")
+  models_pca <- run_parallel_training("pca", "processed_data/mnist_pca.RData", subset_percentage)
   
   # Ensembles PCA
   cat("Entrenando Ensembles PCA...\n")
@@ -248,7 +258,7 @@ main <- function() {
   rm(models_pca, pca_result); gc()
   
   # --- CROP ---
-  models_crop <- run_parallel_training("crop", "processed_data/mnist_crop_pooling.RData")
+  models_crop <- run_parallel_training("crop", "processed_data/mnist_crop_pooling.RData", subset_percentage)
   
   # Ensembles Crop
   cat("Entrenando Ensembles Crop...\n")
