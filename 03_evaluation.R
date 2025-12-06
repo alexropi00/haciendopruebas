@@ -15,6 +15,12 @@ library(randomForest)
 # Cálculo de métricas
 # ----------------------------------------------------------------------------
 compute_confusion_metrics <- function(y_true, y_pred) {
+  # Asegurar que no haya predicciones NA para evitar divisiones 0/0.
+  if (any(is.na(y_pred))) {
+    fill_label <- levels(y_true)[1]
+    y_pred <- factor(ifelse(is.na(y_pred), fill_label, as.character(y_pred)), levels = levels(y_true))
+  }
+
   tbl <- table(y_true, y_pred)
   classes <- union(levels(y_true), levels(y_pred))
   if (!all(classes %in% rownames(tbl))) {
@@ -42,6 +48,8 @@ compute_confusion_metrics <- function(y_true, y_pred) {
 }
 
 compute_log_loss <- function(probs, y_true) {
+  probs[is.na(probs)] <- 0
+
   # Asegurar que las columnas del arreglo de probabilidades estén alineadas con
   # los niveles de las etiquetas.
   levels_order <- levels(y_true)
@@ -92,18 +100,24 @@ get_probabilities <- function(model, X) {
   if (inherits(model, "nnet")) {
     p <- predict(model, X, type = "raw")
     if (is.vector(p)) p <- matrix(p, nrow = nrow(X), byrow = TRUE)
+    p[is.na(p)] <- 0
     return(p)
   }
 
   if (inherits(model, "svm")) {
     p <- attr(predict(model, X, probability = TRUE), "probabilities")
+    p[is.na(p)] <- 0
     return(p)
   }
 
   if (inherits(model, "randomForest")) {
     if (!is.null(model$type) && model$type == "classification") {
       p <- tryCatch(predict(model, X, type = "prob"), error = function(e) NULL)
-      if (!is.null(p)) return(as.matrix(p))
+      if (!is.null(p)) {
+        p <- as.matrix(p)
+        p[is.na(p)] <- 0
+        return(p)
+      }
     }
     return(NULL)
   }
@@ -161,12 +175,27 @@ predict_labels <- function(model, X, levels_order) {
     if (is.null(colnames(probs)) && ncol(probs) == length(levels_order)) {
       colnames(probs) <- levels_order
     }
-    preds <- apply(probs, 1, function(r) {
-      lvl <- colnames(probs)[which.max(r)]
-      if (is.null(lvl)) return(which.max(r) - 1)
+
+    aligned_probs <- probs
+    if (!is.null(colnames(probs)) && all(levels_order %in% colnames(probs))) {
+      aligned_probs <- probs[, levels_order, drop = FALSE]
+    }
+
+    preds <- apply(aligned_probs, 1, function(r) {
+      if (all(is.na(r))) return(NA_character_)
+      idx <- which.max(r)
+      lvl <- if (!is.null(colnames(aligned_probs))) colnames(aligned_probs)[idx] else idx - 1
       lvl
     })
-    return(list(labels = factor(preds, levels = levels_order), probs = probs))
+
+    labels <- factor(preds, levels = levels_order)
+    if (any(is.na(labels))) {
+      raw_pred <- predict(model, X)
+      labels <- factor(raw_pred, levels = levels_order)
+      return(list(labels = labels, probs = NULL))
+    }
+
+    return(list(labels = labels, probs = aligned_probs))
   }
 
   raw_pred <- predict(model, X)
