@@ -140,7 +140,9 @@ prepare_prob_matrix <- function(probs, levels_order, n_rows) {
     return(matrix(0, nrow = n_rows, ncol = length(levels_order)))
   }
 
-  if (is.null(colnames(probs)) && ncol(probs) == length(levels_order)) {
+  prob_names <- colnames(probs)
+  if ((is.null(prob_names) || isTRUE(any(is.na(prob_names)))) &&
+      ncol(probs) == length(levels_order)) {
     colnames(probs) <- levels_order
   }
 
@@ -182,7 +184,9 @@ build_meta_features <- function(models, X, levels_order, max_base_models = 5) {
 predict_labels <- function(model, X, levels_order) {
   probs <- get_probabilities(model, X)
   if (!is.null(probs)) {
-    if (is.null(colnames(probs)) && ncol(probs) == length(levels_order)) {
+    prob_names <- colnames(probs)
+    if ((is.null(prob_names) || isTRUE(any(is.na(prob_names)))) &&
+        ncol(probs) == length(levels_order)) {
       colnames(probs) <- levels_order
     }
 
