@@ -79,9 +79,10 @@ worker_wrapper <- function(job) {
     n <- max(2, floor(length(c_idx) * subset_percentage))
     train_idx <- c(train_idx, sample(c_idx, n))
   }
-  
+
   X_sub <- cache$X[train_idx, ]
   y_sub <- as.factor(cache$y[train_idx])
+  y_sub_matrix <- class.ind(y_sub) # Matrix mantiene alineación fila-fila con X_sub
   
   # --- ENTRENAMIENTO ---
   start <- Sys.time()
@@ -94,8 +95,8 @@ worker_wrapper <- function(job) {
       if (!is.numeric(config$hidden) || length(config$hidden) != 1) {
         stop("config$hidden debe ser un valor numérico escalar para 'nnet'.")
       }
-      model <- nnet(x = X_sub, y = y_sub, size = config$hidden, maxit = config$max_iter,
-                    decay = config$decay, MaxNWts = 50000, trace = FALSE)
+      model <- nnet(x = X_sub, y = y_sub_matrix, size = config$hidden, maxit = config$max_iter,
+                    decay = config$decay, MaxNWts = 50000, trace = FALSE, softmax = TRUE)
     } else if (config$type == "svm") {
       if (is.null(config$gamma)) {
         model <- svm(x = X_sub, y = y_sub, kernel = config$kernel, cost = config$cost, scale = TRUE, probability = TRUE)
