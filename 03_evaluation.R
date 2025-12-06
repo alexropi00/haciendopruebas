@@ -63,7 +63,7 @@ compute_log_loss <- function(probs, y_true) {
   # los niveles de las etiquetas.
   levels_order <- levels(y_true)
   current_names <- colnames(probs)
-  if (is.null(current_names) || any(is.na(current_names))) {
+  if (is.null(current_names) || isTRUE(any(is.na(current_names)))) {
     if (ncol(probs) == length(levels_order)) {
       colnames(probs) <- levels_order
     } else {
