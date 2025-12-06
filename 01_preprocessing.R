@@ -20,10 +20,10 @@ library(doParallel)
 library(foreach)
 
 # Configurar paralelización para foreach
-n_cores <- detectCores() - 1
+n_cores <- max(1, detectCores() - 1)
+cat(sprintf("Detectados %d núcleos, usando %d para foreach\n", detectCores(), n_cores))
 cl <- makeCluster(n_cores)
 registerDoParallel(cl)
-cat(sprintf("Usando %d núcleos para procesamiento paralelo con foreach\n", n_cores))
 
 # ============================================================================
 # FUNCIONES PARA LEER MNIST (archivos binarios IDX)
