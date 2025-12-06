@@ -26,6 +26,49 @@ cl <- makeCluster(n_cores)
 registerDoParallel(cl)
 
 # ============================================================================
+# LOCALIZACIÓN ROBUSTA DEL DATASET
+# ============================================================================
+
+# Devuelve la ruta donde se encuentra la carpeta DataSetMINST, independientemente
+# del directorio de trabajo desde el que se ejecute el script. Prueba con:
+# 1) Directorio de trabajo actual.
+# 2) Directorio donde se encuentra este script (si está disponible).
+# 3) Directorio indicado por el argumento --file usado por Rscript.
+find_dataset_path <- function() {
+  candidates <- c()
+
+  # 1) Directorio de trabajo actual
+  candidates <- c(candidates, file.path(getwd(), "DataSetMINST"))
+
+  # 2) Directorio del script (cuando se ejecuta con source o Rscript)
+  script_path <- NULL
+  if (!is.null(sys.frame(1)$ofile)) {
+    script_path <- sys.frame(1)$ofile
+  } else {
+    args <- commandArgs(trailingOnly = FALSE)
+    file_arg <- grep("^--file=", args, value = TRUE)
+    if (length(file_arg) > 0) {
+      script_path <- sub("^--file=", "", file_arg[1])
+    }
+  }
+
+  if (!is.null(script_path)) {
+    candidates <- c(candidates, file.path(dirname(normalizePath(script_path)),
+                                          "DataSetMINST"))
+  }
+
+  existing <- candidates[file.exists(candidates)]
+
+  if (length(existing) == 0) {
+    stop("No se encontró la carpeta DataSetMINST. Directorio de trabajo: ",
+         getwd(), "\nProbé en: \n - ", paste(candidates, collapse = "\n - "),
+         call. = FALSE)
+  }
+
+  return(existing[1])
+}
+
+# ============================================================================
 # FUNCIONES PARA LEER MNIST (archivos binarios IDX)
 # ============================================================================
 
@@ -62,13 +105,23 @@ read_idx_labels <- function(filepath) {
 # Función para cargar MNIST
 load_mnist_data <- function() {
   cat("Cargando datos MNIST...\n")
-  
-  base_path <- "./DataSetMINST/"
-  
-  train_images_file <- paste0(base_path, "train-images.idx3-ubyte")
-  train_labels_file <- paste0(base_path, "train-labels.idx1-ubyte")
-  test_images_file <- paste0(base_path, "t10k-images.idx3-ubyte")
-  test_labels_file <- paste0(base_path, "t10k-labels.idx1-ubyte")
+
+  base_path <- find_dataset_path()
+  cat(sprintf("Usando dataset en: %s\n", base_path))
+
+  train_images_file <- file.path(base_path, "train-images.idx3-ubyte")
+  train_labels_file <- file.path(base_path, "train-labels.idx1-ubyte")
+  test_images_file <- file.path(base_path, "t10k-images.idx3-ubyte")
+  test_labels_file <- file.path(base_path, "t10k-labels.idx1-ubyte")
+
+  dataset_files <- c(train_images_file, train_labels_file,
+                     test_images_file, test_labels_file)
+
+  missing_files <- dataset_files[!file.exists(dataset_files)]
+  if (length(missing_files) > 0) {
+    stop("No se pudieron encontrar los siguientes archivos del dataset:\n - ",
+         paste(missing_files, collapse = "\n - "), call. = FALSE)
+  }
   
   cat("Train:\n")
   train_images <- read_idx_images(train_images_file)
