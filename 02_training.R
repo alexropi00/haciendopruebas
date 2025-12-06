@@ -8,6 +8,56 @@ library(randomForest)
 library(parallel)
 
 # ============================================================================
+# PROGRESO EN PARALELISMO
+# ============================================================================
+execute_jobs_with_progress <- function(cl, jobs, worker_fun) {
+  total_jobs <- length(jobs)
+  if (total_jobs == 0) return(list())
+
+  # Barra de progreso básica
+  pb <- txtProgressBar(min = 0, max = total_jobs, style = 3)
+  start_time <- Sys.time()
+
+  results <- vector("list", total_jobs)
+  next_job <- 1
+
+  # Enviar una tarea por worker al inicio
+  for (node in seq_along(cl)) {
+    if (next_job <= total_jobs) {
+      parallel:::sendCall(cl[[node]], worker_fun, list(jobs[[next_job]]), tag = next_job)
+      next_job <- next_job + 1
+    }
+  }
+
+  completed <- 0
+
+  while (completed < total_jobs) {
+    res <- parallel:::recvOneResult(cl)
+    completed <- completed + 1
+    results[[res$tag]] <- res$value
+
+    # Actualizar progreso y ETA
+    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    avg_time <- elapsed / completed
+    remaining <- total_jobs - completed
+    eta_hours <- (avg_time * remaining) / 3600
+
+    setTxtProgressBar(pb, completed)
+    cat(sprintf("  [%d/%d] ETA: %.2f horas (%.1f min transcurridos)\n",
+                completed, total_jobs, eta_hours, elapsed / 60))
+
+    # Enviar siguiente tarea al mismo nodo si quedan pendientes
+    if (next_job <= total_jobs) {
+      parallel:::sendCall(cl[[res$node]], worker_fun, list(jobs[[next_job]]), tag = next_job)
+      next_job <- next_job + 1
+    }
+  }
+
+  close(pb)
+  results
+}
+
+# ============================================================================
 # CONFIGURACIÓN
 # ============================================================================
 MAX_CORES <- 10
@@ -170,9 +220,9 @@ run_parallel_training <- function(dataset_name, dataset_path, subset_percentage 
   on.exit(stopCluster(cl))
   
   cat("Enviando jobs a workers (Environment Cleaned)...\n")
-  
-  # Ejecutar con Balanceo de Carga
-  results_meta <- clusterApplyLB(cl, jobs, worker_wrapper)
+
+  # Ejecutar con Balanceo de Carga mostrando progreso y ETA
+  results_meta <- execute_jobs_with_progress(cl, jobs, worker_wrapper)
   
   # Recuperar resultados (Solo rutas de archivos)
   cat("Recuperando modelos desde disco...\n")
