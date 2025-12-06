@@ -111,6 +111,50 @@ get_probabilities <- function(model, X) {
   NULL
 }
 
+prepare_prob_matrix <- function(probs, levels_order, n_rows) {
+  if (is.null(probs)) {
+    return(matrix(0, nrow = n_rows, ncol = length(levels_order)))
+  }
+
+  if (is.null(colnames(probs)) && ncol(probs) == length(levels_order)) {
+    colnames(probs) <- levels_order
+  }
+
+  missing_cols <- setdiff(levels_order, colnames(probs))
+  if (length(missing_cols) > 0 || ncol(probs) != length(levels_order)) {
+    warning(
+      sprintf(
+        "No se pudieron alinear las probabilidades para el meta-modelo: se esperaban %d columnas y se recibieron %d.",
+        length(levels_order), ncol(probs)
+      )
+    )
+    return(matrix(0, nrow = nrow(probs), ncol = length(levels_order)))
+  }
+
+  probs[, levels_order, drop = FALSE]
+}
+
+build_meta_features <- function(models, X, levels_order, max_base_models = 5) {
+  base_idx <- which(!grepl("^ensemble_", vapply(models, function(m) m$type, character(1))) &
+                      vapply(models, function(m) isTRUE(m$success) || is.null(m$success), logical(1)))
+  if (length(base_idx) == 0) {
+    return(NULL)
+  }
+
+  selected_idx <- head(base_idx, max_base_models)
+  selected <- models[selected_idx]
+
+  meta <- matrix(0, nrow = nrow(X), ncol = length(selected) * length(levels_order))
+  for (i in seq_along(selected)) {
+    probs <- get_probabilities(selected[[i]]$model, X)
+    aligned <- prepare_prob_matrix(probs, levels_order, nrow(X))
+    col_range <- ((i - 1) * length(levels_order) + 1):(i * length(levels_order))
+    meta[, col_range] <- aligned
+  }
+
+  meta
+}
+
 predict_labels <- function(model, X, levels_order) {
   probs <- get_probabilities(model, X)
   if (!is.null(probs)) {
@@ -140,8 +184,18 @@ evaluate_models <- function(models, dataset_name, X_test, y_test) {
     info <- models[[model_name]]
     model <- info$model
 
+    X_eval <- X_test
+    if (grepl("^ensemble_", info$type)) {
+      X_meta <- build_meta_features(models, X_test, levels_order)
+      if (is.null(X_meta)) {
+        warning(sprintf("No se pudieron generar características meta para el modelo %s; se omite.", model_name))
+        return(NULL)
+      }
+      X_eval <- X_meta
+    }
+
     start_time <- Sys.time()
-    pred_data <- predict_labels(model, X_test, levels_order)
+    pred_data <- predict_labels(model, X_eval, levels_order)
     elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
 
     metrics <- compute_confusion_metrics(y_test, pred_data$labels)
@@ -160,6 +214,9 @@ evaluate_models <- function(models, dataset_name, X_test, y_test) {
       inference_time_sec = elapsed
     )
   })
+
+  results <- Filter(Negate(is.null), results)
+  if (length(results) == 0) return(data.frame())
 
   do.call(rbind, lapply(results, as.data.frame))
 }
