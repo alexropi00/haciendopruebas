@@ -99,7 +99,11 @@ build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
     stop("No hay modelos base válidos para construir el ensemble.")
   }
 
-  use_parallel <- cores > 1 && length(base_names) > 1
+  workload <- nrow(X_ens) * length(base_names)
+  use_parallel <- cores > 1 && length(base_names) > 1 && workload >= 2500
+
+  # Exportamos solo los modelos base para minimizar el tráfico al cluster
+  base_models <- lapply(base_names, function(nm) models[[nm]]$model)
 
   run_seq <- function() {
     lapply(seq_along(base_names), function(i) {
@@ -114,13 +118,13 @@ build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
   if (use_parallel) {
     cl <- makeCluster(cores)
     on.exit(stopCluster(cl), add = TRUE)
-    clusterExport(cl, varlist = c("models", "X_ens", "all_levels", "get_probs_named", "base_names"), envir = environment())
+    clusterExport(cl, varlist = c("base_models", "X_ens", "all_levels", "get_probs_named", "base_names"), envir = environment())
     clusterEvalQ(cl, {library(nnet); library(e1071); library(randomForest)})
 
     results <- tryCatch({
       parLapply(cl, seq_along(base_names), function(i) {
         name <- base_names[[i]]
-        p <- tryCatch(get_probs_named(models[[name]]$model, X_ens, all_levels),
+        p <- tryCatch(get_probs_named(base_models[[i]], X_ens, all_levels),
                       error = function(e) NULL)
         if (is.null(p)) {
           list(idx = i, probs = NULL, warn = sprintf("Modelo %s sin probabilidades válidas", name))
@@ -135,6 +139,9 @@ build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
     update_bar(length(base_names))
     cat("\n")
   } else {
+    if (cores > 1 && workload < 2500) {
+      cat(sprintf("\n   [INFO] Carga pequeña (%d unidades); se usa ejecución secuencial para evitar sobrecoste de cluster.\n", workload))
+    }
     results <- run_seq()
     cat("\n")
   }
