@@ -24,7 +24,10 @@ strip_model <- function(model) {
 # Obtiene probabilidades y las alinea con todas las clases esperadas
 get_probs_named <- function(model, X, all_levels) {
   # Mantener las columnas en data.frame para modelos que usan fórmulas
-  X_df <- as.data.frame(X)
+  X_df <- as.data.frame(as.matrix(X))
+  if (is.null(colnames(X_df))) {
+    colnames(X_df) <- paste0("V", seq_len(ncol(X_df)))
+  }
 
   safe_pred <- tryCatch({
     if (inherits(model, "nnet")) {
@@ -98,6 +101,7 @@ make_step_tracker <- function(total_steps) {
 build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
   total_cols <- length(base_names) * length(all_levels)
   X_meta <- matrix(0, nrow = nrow(X_ens), ncol = total_cols)
+  colnames(X_meta) <- as.vector(t(outer(base_names, all_levels, paste, sep = "__")))
 
   step_start <- Sys.time()
   pb <- txtProgressBar(min = 0, max = length(base_names), style = 3)
@@ -178,6 +182,31 @@ build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
   X_meta
 }
 
+sample_ensemble_data <- function(full_train, train_labels, n_samples) {
+  all_levels <- levels(factor(train_labels))
+  n_take <- min(max(n_samples, length(all_levels)), nrow(full_train))
+
+  idx_by_level <- lapply(all_levels, function(lv) which(train_labels == lv))
+  names(idx_by_level) <- all_levels
+
+  missing_levels <- names(idx_by_level)[sapply(idx_by_level, length) == 0]
+  if (length(missing_levels) > 0) {
+    warning(sprintf("Clases ausentes en el dataset original: %s", paste(missing_levels, collapse = ", ")))
+  }
+
+  present_levels <- setdiff(all_levels, missing_levels)
+  per_class <- lapply(idx_by_level[present_levels], function(idx_lv) sample(idx_lv, 1))
+  remaining <- n_take - length(per_class)
+
+  pool <- unlist(idx_by_level[present_levels], use.names = FALSE)
+  extra <- if (remaining > 0) sample(pool, remaining, replace = length(pool) < remaining) else integer(0)
+
+  idx <- sample(c(unlist(per_class), extra))
+  y_ens <- factor(train_labels[idx], levels = present_levels)
+
+  list(idx = idx, y = y_ens, levels = levels(y_ens))
+}
+
 repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores = max(1, detectCores() - 1)) {
   cat(sprintf("\n>>> Reparando ensembles para: %s <<<\n", model_path))
   tracker <- make_step_tracker(total_steps = 5)
@@ -200,26 +229,13 @@ repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores =
   if (!exists("train_labels")) stop("Falta 'train_labels' en el dataset cargado.")
 
   set.seed(123)
-  all_levels <- levels(factor(train_labels))
+  sampled <- sample_ensemble_data(full_train, train_labels, n_samples)
 
-  # Forzar que haya al menos una muestra de cada clase para evitar vacíos en el
-  # entrenamiento de los ensembles (p. ej., randomForest no admite clases vacías)
-  n_take <- min(max(n_samples, length(all_levels)), nrow(full_train))
-  per_class_indices <- lapply(all_levels, function(lv) {
-    idx_lv <- which(train_labels == lv)
-    if (length(idx_lv) == 0) {
-      stop(sprintf("La clase '%s' no tiene muestras en el dataset", lv))
-    }
-    sample(idx_lv, 1)
-  })
-  remaining <- n_take - length(all_levels)
-  extra_indices <- if (remaining > 0) sample(seq_len(nrow(full_train)), remaining, replace = FALSE) else integer(0)
-  idx <- sample(c(unlist(per_class_indices), extra_indices))
+  X_ens <- as.matrix(full_train[sampled$idx, , drop = FALSE])
+  y_ens <- sampled$y
+  class_levels <- sampled$levels
 
-  X_ens <- as.matrix(full_train[idx, , drop = FALSE])
-  y_ens <- factor(train_labels[idx], levels = all_levels)
-
-  cat(sprintf("   Muestras tomadas: %d | Clases: %d\n", nrow(X_ens), length(all_levels)))
+  cat(sprintf("   Muestras tomadas: %d | Clases: %d\n", nrow(X_ens), length(class_levels)))
   tracker$advance("Datos cargados y muestreados")
 
   # LIBERAR MEMORIA AGRESIVAMENTE
@@ -251,12 +267,13 @@ repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores =
 
   # --- 3. GENERAR META-FEATURES ---
   cat("3. Generando meta-features...")
-  X_meta <- build_meta_matrix(base_names, models, X_ens, all_levels, cores)
+  X_meta <- build_meta_matrix(base_names, models, X_ens, class_levels, cores)
   cat(" listo.\n")
   tracker$advance("Meta-features generados")
 
   # --- 4. ENTRENAR ENSEMBLES ---
   cat("4. Entrenando ensembles (MLP, RF, SVM)...\n")
+  y_ens <- droplevels(y_ens)
   ens_mlp <- nnet(x = X_meta, y = class.ind(y_ens), size = 40, maxit = 200, trace = FALSE, softmax = TRUE, MaxNWts = 75000)
   ens_rf <- randomForest(x = X_meta, y = y_ens, ntree = 80, mtry = max(1, floor(sqrt(ncol(X_meta)))), importance = FALSE)
   ens_svm <- svm(x = X_meta, y = y_ens, kernel = "radial", cost = 5, gamma = 1 / ncol(X_meta), probability = TRUE)
