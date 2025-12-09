@@ -23,41 +23,56 @@ strip_model <- function(model) {
 
 # Obtiene probabilidades y las alinea con todas las clases esperadas
 get_probs_named <- function(model, X, all_levels) {
-  raw_pred <- tryCatch({
+  # Mantener las columnas en data.frame para modelos que usan fórmulas
+  X_df <- as.data.frame(X)
+
+  safe_pred <- tryCatch({
     if (inherits(model, "nnet")) {
-      predict(model, X, type = "raw")
+      p <- predict(model, X_df, type = "raw")
+      if (is.vector(p)) p <- matrix(p, nrow = nrow(X_df), byrow = TRUE)
+      p
     } else if (inherits(model, "svm")) {
-      attr(predict(model, X, probability = TRUE), "probabilities")
+      attr(predict(model, X_df, probability = TRUE), "probabilities")
     } else if (inherits(model, "randomForest")) {
-      predict(model, X, type = "prob")
-    } else { NULL }
+      predict(model, X_df, type = "prob")
+    } else {
+      NULL
+    }
   }, error = function(e) NULL)
 
-  if (is.null(raw_pred)) return(NULL)
+  if (is.null(safe_pred)) return(NULL)
 
-  probs <- tryCatch(as.matrix(raw_pred), error = function(e) NULL)
+  probs <- tryCatch(as.matrix(safe_pred), error = function(e) NULL)
   if (is.null(probs)) return(NULL)
 
-  n_rows <- nrow(X)
-  n_cols <- length(all_levels)
-  # Asegurar que el número de filas coincide; si es vector con longitud correcta, rehacer matriz
+  # Si predict devolvió un vector plano, levantarlo a matriz (columnas = 1)
+  n_rows <- nrow(X_df)
   if (is.null(dim(probs)) && length(probs) == n_rows) {
     probs <- matrix(probs, ncol = 1)
   }
 
-  if (is.null(nrow(probs)) || nrow(probs) != n_rows) {
-    return(NULL)
-  }
+  # Alineación de dimensiones
+  if (is.null(nrow(probs)) || nrow(probs) != n_rows) return(NULL)
+
+  # Normalizar NAs
+  probs[is.na(probs)] <- 0
+
+  # Alinear con el conjunto completo de clases
+  n_cols <- length(all_levels)
   full_probs <- matrix(0, nrow = n_rows, ncol = n_cols)
   colnames(full_probs) <- all_levels
 
+  # Usar nombres de columnas cuando existan; en su defecto, copiar si las dimensiones coinciden
   if (!is.null(colnames(probs))) {
     available_cols <- intersect(colnames(probs), all_levels)
-    if (length(available_cols) > 0) full_probs[, available_cols, drop = FALSE] <- probs[, available_cols, drop = FALSE]
+    if (length(available_cols) > 0) {
+      full_probs[, available_cols, drop = FALSE] <- probs[, available_cols, drop = FALSE]
+    }
   } else if (ncol(probs) == n_cols) {
     full_probs[] <- probs
   }
-  return(full_probs)
+
+  full_probs
 }
 
 # Barra de progreso para pasos globales
@@ -188,9 +203,9 @@ repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores =
   n_take <- min(n_samples, nrow(full_train))
   idx <- sample(seq_len(nrow(full_train)), n_take)
 
-  X_ens <- as.matrix(full_train[idx, ])
-  y_ens <- factor(train_labels[idx])
-  all_levels <- levels(y_ens)
+  all_levels <- levels(factor(train_labels))
+  X_ens <- as.matrix(full_train[idx, , drop = FALSE])
+  y_ens <- factor(train_labels[idx], levels = all_levels)
 
   cat(sprintf("   Muestras tomadas: %d | Clases: %d\n", nrow(X_ens), length(all_levels)))
   tracker$advance("Datos cargados y muestreados")
