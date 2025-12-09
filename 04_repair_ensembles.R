@@ -52,10 +52,40 @@ get_probs_named <- function(model, X, all_levels) {
   return(full_probs)
 }
 
+# Barra de progreso para pasos globales
+make_step_tracker <- function(total_steps) {
+  start_time <- Sys.time()
+  pb <- txtProgressBar(min = 0, max = total_steps, style = 3)
+  current_step <- 0
+
+  list(
+    advance = function(label) {
+      current_step <<- current_step + 1
+      setTxtProgressBar(pb, current_step)
+      elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+      eta <- max(0, (elapsed / current_step) * (total_steps - current_step))
+      cat(sprintf("\n   Paso %d/%d: %s | Tiempo transcurrido: %.1fs | ETA restante: %.1fs\n",
+                  current_step, total_steps, label, elapsed, eta))
+    },
+    close = function() close(pb)
+  )
+}
+
 # Calcula la matriz de meta-features en paralelo (si hay núcleos disponibles)
 build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
   total_cols <- length(base_names) * length(all_levels)
   X_meta <- matrix(0, nrow = nrow(X_ens), ncol = total_cols)
+
+  step_start <- Sys.time()
+  pb <- txtProgressBar(min = 0, max = length(base_names), style = 3)
+  update_bar <- function(i) {
+    setTxtProgressBar(pb, i)
+    elapsed <- as.numeric(difftime(Sys.time(), step_start, units = "secs"))
+    if (i > 0) {
+      eta <- max(0, (elapsed / i) * (length(base_names) - i))
+      cat(sprintf("\r   Modelos procesados: %d/%d | Tiempo: %.1fs | ETA: %.1fs", i, length(base_names), elapsed, eta))
+    }
+  }
 
   if (length(base_names) == 0) {
     stop("No hay modelos base válidos para construir el ensemble.")
@@ -73,12 +103,16 @@ build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
       p <- get_probs_named(models[[name]]$model, X_ens, all_levels)
       list(name = name, probs = p)
     })
+    update_bar(length(base_names))
+    cat("\n")
   } else {
-    results <- lapply(base_names, function(name) {
-      cat(".")
+    results <- lapply(seq_along(base_names), function(i) {
+      name <- base_names[[i]]
       p <- get_probs_named(models[[name]]$model, X_ens, all_levels)
+      update_bar(i)
       list(name = name, probs = p)
     })
+    cat("\n")
   }
 
   for (i in seq_along(results)) {
@@ -91,11 +125,14 @@ build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
     X_meta[, col_start:col_end] <- p
   }
 
+  close(pb)
   X_meta
 }
 
 repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores = max(1, detectCores() - 1)) {
   cat(sprintf("\n>>> Reparando ensembles para: %s <<<\n", model_path))
+  tracker <- make_step_tracker(total_steps = 5)
+  on.exit(tracker$close(), add = TRUE)
 
   # --- 1. CARGAR DATOS Y EXTRAER MUESTRA ---
   cat("1. Cargando datos...\n")
@@ -122,6 +159,7 @@ repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores =
   all_levels <- levels(y_ens)
 
   cat(sprintf("   Muestras tomadas: %d | Clases: %d\n", nrow(X_ens), length(all_levels)))
+  tracker$advance("Datos cargados y muestreados")
 
   # LIBERAR MEMORIA AGRESIVAMENTE
   cat("   (Liberando dataset original...)\n")
@@ -148,17 +186,20 @@ repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores =
   base_names <- base_names[sapply(base_names, function(n) !is.null(models[[n]]$model))]
 
   cat(sprintf("   Usando %d modelos base.\n", length(base_names)))
+  tracker$advance("Modelos base cargados")
 
   # --- 3. GENERAR META-FEATURES ---
   cat("3. Generando meta-features...")
   X_meta <- build_meta_matrix(base_names, models, X_ens, all_levels, cores)
   cat(" listo.\n")
+  tracker$advance("Meta-features generados")
 
   # --- 4. ENTRENAR ENSEMBLES ---
   cat("4. Entrenando ensembles (MLP, RF, SVM)...\n")
   ens_mlp <- nnet(x = X_meta, y = class.ind(y_ens), size = 40, maxit = 200, trace = FALSE, softmax = TRUE, MaxNWts = 75000)
   ens_rf <- randomForest(x = X_meta, y = y_ens, ntree = 80, mtry = max(1, floor(sqrt(ncol(X_meta)))), importance = FALSE)
   ens_svm <- svm(x = X_meta, y = y_ens, kernel = "radial", cost = 5, gamma = 1 / ncol(X_meta), probability = TRUE)
+  tracker$advance("Ensembles entrenados")
 
   # Limpiar modelos (stripping)
   ens_mlp <- strip_model(ens_mlp)
@@ -182,6 +223,7 @@ repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores =
   save(list = c(obj_name), file = model_path, compress = "xz")
 
   cat("✓ Guardado OK.\n")
+  tracker$advance("Modelos guardados")
   rm(models, X_meta, X_ens, y_ens)
   gc()
 }
