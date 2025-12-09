@@ -200,10 +200,22 @@ repair_ensembles <- function(dataset_path, model_path, n_samples = 1000, cores =
   if (!exists("train_labels")) stop("Falta 'train_labels' en el dataset cargado.")
 
   set.seed(123)
-  n_take <- min(n_samples, nrow(full_train))
-  idx <- sample(seq_len(nrow(full_train)), n_take)
-
   all_levels <- levels(factor(train_labels))
+
+  # Forzar que haya al menos una muestra de cada clase para evitar vacíos en el
+  # entrenamiento de los ensembles (p. ej., randomForest no admite clases vacías)
+  n_take <- min(max(n_samples, length(all_levels)), nrow(full_train))
+  per_class_indices <- lapply(all_levels, function(lv) {
+    idx_lv <- which(train_labels == lv)
+    if (length(idx_lv) == 0) {
+      stop(sprintf("La clase '%s' no tiene muestras en el dataset", lv))
+    }
+    sample(idx_lv, 1)
+  })
+  remaining <- n_take - length(all_levels)
+  extra_indices <- if (remaining > 0) sample(seq_len(nrow(full_train)), remaining, replace = FALSE) else integer(0)
+  idx <- sample(c(unlist(per_class_indices), extra_indices))
+
   X_ens <- as.matrix(full_train[idx, , drop = FALSE])
   y_ens <- factor(train_labels[idx], levels = all_levels)
 
