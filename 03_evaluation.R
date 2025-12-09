@@ -1,10 +1,5 @@
 # ============================================================================
-# 03_evaluation.R - Evaluación de modelos entrenados sobre el conjunto de test
-# ============================================================================
-# Este script carga los modelos generados en 02_training.R y los evalúa sobre
-# el conjunto de test de cada variante de preprocesamiento (PCA y Crop+Pooling).
-# Para cada modelo se calculan métricas clave (accuracy, loss, F1-score) y se
-# mide el tiempo total necesario para procesar el conjunto de test completo.
+# 03_evaluation_fixed.R - EVALUACIÓN CON MANEJO DE ERRORES DE ENSEMBLE
 # ============================================================================
 
 library(nnet)
@@ -12,298 +7,194 @@ library(e1071)
 library(randomForest)
 
 # ----------------------------------------------------------------------------
-# Cálculo de métricas
+# Cálculo de métricas (Protegido contra NaNs)
 # ----------------------------------------------------------------------------
 compute_confusion_metrics <- function(y_true, y_pred) {
-  # Asegurar que no haya predicciones NA para evitar divisiones 0/0.
-  if (any(is.na(y_pred))) {
-    fill_label <- levels(y_true)[1]
-    y_pred <- factor(ifelse(is.na(y_pred), fill_label, as.character(y_pred)), levels = levels(y_true))
-  }
-
-  tbl <- table(y_true, y_pred)
-  classes <- union(levels(y_true), levels(y_pred))
-  if (!all(classes %in% rownames(tbl))) {
-    missing_rows <- setdiff(classes, rownames(tbl))
-    for (cls in missing_rows) tbl <- rbind(tbl, setNames(rep(0, ncol(tbl)), colnames(tbl)))
-    rownames(tbl) <- classes
-  }
-  if (!all(classes %in% colnames(tbl))) {
-    missing_cols <- setdiff(classes, colnames(tbl))
-    for (cls in missing_cols) tbl <- cbind(tbl, setNames(rep(0, nrow(tbl)), cls))
-    colnames(tbl) <- classes
-  }
-  diag_vals <- diag(tbl)
-  totals_pred <- colSums(tbl)
-  totals_true <- rowSums(tbl)
-
-  precision <- ifelse(totals_pred == 0, 0, diag_vals / totals_pred)
-  recall <- ifelse(totals_true == 0, 0, diag_vals / totals_true)
-  f1_per_class <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
-
-  macro_f1 <- mean(f1_per_class)
-  overall_acc <- sum(diag_vals) / sum(tbl)
-
+  # Forzar que ambos sean factores con los mismos niveles
+  all_levels <- sort(union(levels(y_true), levels(y_pred)))
+  y_true <- factor(y_true, levels = all_levels)
+  y_pred <- factor(y_pred, levels = all_levels)
+  
+  conf_matrix <- table(y_true, y_pred)
+  diag_vals <- diag(conf_matrix)
+  total_preds <- sum(conf_matrix)
+  
+  if (total_preds == 0) return(list(accuracy = 0, f1 = 0))
+  
+  # Precisión
+  col_sums <- colSums(conf_matrix)
+  precision <- ifelse(col_sums == 0, 0, diag_vals / col_sums)
+  
+  # Recall
+  row_sums <- rowSums(conf_matrix)
+  recall <- ifelse(row_sums == 0, 0, diag_vals / row_sums)
+  
+  # F1
+  f1_per_class <- ifelse((precision + recall) == 0, 0, 2 * (precision * recall) / (precision + recall))
+  
+  macro_f1 <- mean(f1_per_class, na.rm = TRUE)
+  overall_acc <- sum(diag_vals) / total_preds
+  
   list(accuracy = overall_acc, f1 = macro_f1)
 }
 
-compute_log_loss <- function(probs, y_true) {
-  if (is.null(probs) || length(probs) == 0) {
-    return(NA_real_)
-  }
-
-  # Si llega un vector, convertirlo en matriz para evitar ncol() = NULL.
-  if (is.null(dim(probs))) {
-    probs <- matrix(probs, ncol = ifelse(length(probs) == length(levels(y_true)), length(levels(y_true)), 1))
-  }
-
-  probs[is.na(probs)] <- 0
-
-  # Asegurar que las columnas del arreglo de probabilidades estén alineadas con
-  # los niveles de las etiquetas.
-  levels_order <- levels(y_true)
-  current_names <- colnames(probs)
-  if (is.null(current_names) || isTRUE(any(is.na(current_names)))) {
-    if (ncol(probs) == length(levels_order)) {
-      colnames(probs) <- levels_order
-    } else {
-      warning(
-        sprintf(
-          "No se pueden alinear las probabilidades: se esperaban %d columnas y se recibieron %d.",
-          length(levels_order), ncol(probs)
-        )
-      )
-      return(NA_real_)
-    }
-  }
-
-  missing_cols <- setdiff(levels_order, colnames(probs))
-  if (length(missing_cols) > 0) {
-    warning(
-      sprintf(
-        "Faltan probabilidades para algunas clases en la predicción: %s",
-        paste(missing_cols, collapse = ", ")
-      )
-    )
-    return(NA_real_)
-  }
-
-  probs_aligned <- probs[, levels_order, drop = FALSE]
-  probs_clipped <- pmin(pmax(probs_aligned, 1e-15), 1 - 1e-15)
-
-  col_index <- match(y_true, levels_order)
-  if (any(is.na(col_index))) {
-    warning("No se pudieron alinear las etiquetas verdaderas con las columnas de probabilidad")
-    return(NA_real_)
-  }
-
-  true_indices <- cbind(seq_along(y_true), col_index)
-  true_probs <- probs_clipped[true_indices]
-
-  -mean(log(true_probs))
-}
-
 # ----------------------------------------------------------------------------
-# Utilidades de predicción
+# Utilidades
 # ----------------------------------------------------------------------------
 get_probabilities <- function(model, X) {
-  if (inherits(model, "nnet")) {
-    p <- predict(model, X, type = "raw")
-    if (is.vector(p)) p <- matrix(p, nrow = nrow(X), byrow = TRUE)
-    p[is.na(p)] <- 0
-    return(p)
-  }
-
-  if (inherits(model, "svm")) {
-    p <- attr(predict(model, X, probability = TRUE), "probabilities")
-    p[is.na(p)] <- 0
-    return(p)
-  }
-
-  if (inherits(model, "randomForest")) {
-    if (!is.null(model$type) && model$type == "classification") {
-      p <- tryCatch(predict(model, X, type = "prob"), error = function(e) NULL)
-      if (!is.null(p)) {
-        p <- as.matrix(p)
-        p[is.na(p)] <- 0
-        return(p)
-      }
+  tryCatch({
+    if (inherits(model, "nnet")) {
+      probs <- predict(model, X, type = "raw")
+      if (is.vector(probs)) probs <- matrix(probs, nrow = nrow(X), byrow = TRUE)
+      return(probs)
     }
-    return(NULL)
-  }
-
-  NULL
+    if (inherits(model, "svm")) {
+      attr(predict(model, X, probability = TRUE), "probabilities")
+    } else if (inherits(model, "randomForest")) {
+      predict(model, X, type = "prob")
+    } else {
+      NULL
+    }
+  }, error = function(e) NULL)
 }
 
-prepare_prob_matrix <- function(probs, levels_order, n_rows) {
-  if (is.null(probs)) {
-    return(matrix(0, nrow = n_rows, ncol = length(levels_order)))
+build_meta_features <- function(ensemble_info, all_models, X, levels_order) {
+  # Filtro estricto: solo modelos base válidos
+  is_base <- sapply(all_models, function(m) !grepl("^ensemble_", m$type) && !is.null(m$model))
+  base_models <- all_models[is_base]
+  
+  if (length(base_models) == 0) return(NULL)
+  
+  # Matriz vacía
+  n_base <- length(base_models)
+  meta_features <- matrix(0, nrow = nrow(X), ncol = n_base * length(levels_order))
+  
+  for (i in seq_along(base_models)) {
+    model_wrapper <- base_models[[i]]
+    probs <- get_probabilities(model_wrapper$model, X)
+    
+    if (!is.null(probs)) {
+      # Asegurar que las columnas coincidan con los niveles esperados
+      # Si faltan columnas, rellenar con 0
+      aligned_probs <- matrix(0, nrow = nrow(X), ncol = length(levels_order), 
+                              dimnames = list(NULL, levels_order))
+      
+      present_cols <- intersect(colnames(probs), levels_order)
+      if (length(present_cols) > 0) {
+        aligned_probs[, present_cols] <- probs[, present_cols]
+      }
+      
+      col_start <- (i - 1) * length(levels_order) + 1
+      col_end <- i * length(levels_order)
+      meta_features[, col_start:col_end] <- aligned_probs
+    }
+    gc()
   }
-
-  # Convertir vectores a matriz para garantizar que ncol() devuelva un escalar.
-  if (is.null(dim(probs))) {
-    probs <- matrix(probs, nrow = n_rows, ncol = ifelse(length(probs) == length(levels_order), length(levels_order), 1))
-  }
-
-  prob_names <- colnames(probs)
-  n_cols <- ncol(probs)
-  if ((is.null(prob_names) || isTRUE(any(is.na(prob_names)))) &&
-      !is.null(n_cols) && n_cols == length(levels_order)) {
-    colnames(probs) <- levels_order
-  }
-
-  missing_cols <- setdiff(levels_order, colnames(probs))
-  if (length(missing_cols) > 0 || is.null(n_cols) || n_cols != length(levels_order)) {
-    warning(
-      sprintf(
-        "No se pudieron alinear las probabilidades para el meta-modelo: se esperaban %d columnas y se recibieron %s.",
-        length(levels_order), ifelse(is.null(n_cols), "desconocidas", n_cols)
-      )
-    )
-    return(matrix(0, nrow = nrow(probs), ncol = length(levels_order)))
-  }
-
-  probs[, levels_order, drop = FALSE]
-}
-
-build_meta_features <- function(models, X, levels_order, max_base_models = 5) {
-  base_idx <- which(!grepl("^ensemble_", vapply(models, function(m) m$type, character(1))) &
-                      vapply(models, function(m) isTRUE(m$success) || is.null(m$success), logical(1)))
-  if (length(base_idx) == 0) {
-    return(NULL)
-  }
-
-  selected_idx <- head(base_idx, max_base_models)
-  selected <- models[selected_idx]
-
-  meta <- matrix(0, nrow = nrow(X), ncol = length(selected) * length(levels_order))
-  for (i in seq_along(selected)) {
-    probs <- get_probabilities(selected[[i]]$model, X)
-    aligned <- prepare_prob_matrix(probs, levels_order, nrow(X))
-    col_range <- ((i - 1) * length(levels_order) + 1):(i * length(levels_order))
-    meta[, col_range] <- aligned
-  }
-
-  meta
+  
+  # Reemplazar NAs por 0 para que SVM/RF no fallen
+  meta_features[is.na(meta_features)] <- 0
+  return(meta_features)
 }
 
 predict_labels <- function(model, X, levels_order) {
-  probs <- get_probabilities(model, X)
-  if (!is.null(probs)) {
-    if (is.null(dim(probs))) {
-      probs <- matrix(probs, nrow = nrow(X), ncol = ifelse(length(probs) == length(levels_order), length(levels_order), 1))
+  tryCatch({
+    raw_pred <- predict(model, X)
+    
+    # Manejo específico para NNET (Softmax output)
+    if (inherits(model, "nnet") && is.matrix(raw_pred)) {
+      max_idx <- max.col(raw_pred, ties.method = "first")
+      # Mapear índice a nombre de columna si existe, o usar levels_order
+      if (!is.null(colnames(raw_pred))) {
+        pred_class <- colnames(raw_pred)[max_idx]
+      } else {
+        pred_class <- levels_order[max_idx]
+      }
+      return(factor(pred_class, levels = levels_order))
     }
-
-    prob_names <- colnames(probs)
-    n_cols <- ncol(probs)
-    if ((is.null(prob_names) || isTRUE(any(is.na(prob_names)))) &&
-        !is.null(n_cols) && n_cols == length(levels_order)) {
-      colnames(probs) <- levels_order
-    }
-
-    aligned_probs <- probs
-    if (!is.null(colnames(probs)) && all(levels_order %in% colnames(probs))) {
-      aligned_probs <- probs[, levels_order, drop = FALSE]
-    }
-
-    preds <- apply(aligned_probs, 1, function(r) {
-      if (all(is.na(r))) return(NA_character_)
-      idx <- which.max(r)
-      lvl <- if (!is.null(colnames(aligned_probs))) colnames(aligned_probs)[idx] else idx - 1
-      lvl
-    })
-
-    labels <- factor(preds, levels = levels_order)
-    if (any(is.na(labels))) {
-      raw_pred <- predict(model, X)
-      labels <- factor(raw_pred, levels = levels_order)
-      return(list(labels = labels, probs = NULL))
-    }
-
-    return(list(labels = labels, probs = aligned_probs))
-  }
-
-  raw_pred <- predict(model, X)
-  list(labels = factor(raw_pred, levels = levels_order), probs = NULL)
+    
+    # Manejo estándar
+    factor(raw_pred, levels = levels_order)
+  }, error = function(e) {
+    # Fallback en caso de error catastrófico: devolver primera clase
+    warning(paste("Error predicción:", e$message))
+    factor(rep(levels_order[1], nrow(X)), levels = levels_order)
+  })
 }
 
 # ----------------------------------------------------------------------------
-# Evaluación de un conjunto de modelos sobre un dataset concreto
+# Evaluación
 # ----------------------------------------------------------------------------
 evaluate_models <- function(models, dataset_name, X_test, y_test) {
-  cat(sprintf("\n== Evaluando modelos (%s) ==\n", dataset_name))
+  cat(sprintf("\n== Evaluando modelos para [%s] ==\n", toupper(dataset_name)))
   levels_order <- levels(y_test)
-
-  results <- lapply(names(models), function(model_name) {
+  results_list <- list()
+  
+  for (model_name in names(models)) {
     info <- models[[model_name]]
+    if (is.null(info$model)) next
+    
     model <- info$model
-
+    cat(sprintf("-> Evaluando: %-20s (%s)... ", model_name, info$type))
+    
     X_eval <- X_test
+    
     if (grepl("^ensemble_", info$type)) {
-      X_meta <- build_meta_features(models, X_test, levels_order)
-      if (is.null(X_meta)) {
-        warning(sprintf("No se pudieron generar características meta para el modelo %s; se omite.", model_name))
-        return(NULL)
+      X_eval <- build_meta_features(info, models, X_test, levels_order)
+      if (is.null(X_eval)) {
+        cat("ERROR META-FEATURES\n")
+        next
       }
-      X_eval <- X_meta
     }
-
-    start_time <- Sys.time()
-    pred_data <- predict_labels(model, X_eval, levels_order)
-    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-
-    metrics <- compute_confusion_metrics(y_test, pred_data$labels)
-    loss <- NA_real_
-    if (!is.null(pred_data$probs)) {
-      loss <- compute_log_loss(pred_data$probs, y_test)
-    }
-
-    list(
+    
+    start <- Sys.time()
+    pred <- predict_labels(model, X_eval, levels_order)
+    elapsed <- as.numeric(difftime(Sys.time(), start, units = "secs"))
+    
+    metrics <- compute_confusion_metrics(y_test, pred)
+    
+    results_list[[model_name]] <- data.frame(
       dataset = dataset_name,
       model = model_name,
       type = info$type,
       accuracy = metrics$accuracy,
       f1 = metrics$f1,
-      loss = loss,
-      inference_time_sec = elapsed
+      time_sec = elapsed,
+      stringsAsFactors = FALSE
     )
-  })
-
-  results <- Filter(Negate(is.null), results)
-  if (length(results) == 0) return(data.frame())
-
-  do.call(rbind, lapply(results, as.data.frame))
+    
+    cat(sprintf("Acc: %.4f | F1: %.4f\n", metrics$accuracy, metrics$f1))
+    gc()
+  }
+  
+  if (length(results_list) == 0) return(NULL)
+  do.call(rbind, results_list)
 }
 
 # ----------------------------------------------------------------------------
-# Carga de datos y ejecución principal
+# Main
 # ----------------------------------------------------------------------------
 main <- function() {
-  if (!file.exists("trained_models/models_pca.RData") ||
-      !file.exists("trained_models/models_crop_pooling.RData")) {
-    stop("No se encontraron los archivos de modelos en 'trained_models/'. Ejecuta 02_training.R primero.")
-  }
-
-  cat("Cargando datos procesados...\n")
+  if (!dir.exists("evaluation")) dir.create("evaluation")
+  
+  # Cargar datos
   load("processed_data/mnist_pca.RData")
   load("processed_data/mnist_crop_pooling.RData")
-
-  cat("Cargando modelos entrenados...\n")
+  
+  # Evaluar PCA
   load("trained_models/models_pca.RData")
-  load("trained_models/models_crop_pooling.RData")
-
   y_test_pca <- factor(test_labels, levels = sort(unique(train_labels)))
+  res_pca <- evaluate_models(models_pca, "pca", pca_result$test, y_test_pca)
+  rm(models_pca); gc()
+  
+  # Evaluar CROP
+  load("trained_models/models_crop_pooling.RData")
   y_test_crop <- factor(test_labels, levels = sort(unique(train_labels)))
-
-  results_pca <- evaluate_models(models_pca, "pca", pca_result$test, y_test_pca)
-  results_crop <- evaluate_models(models_crop, "crop_pooling", crop_result$test, y_test_crop)
-
-  results <- rbind(results_pca, results_crop)
-  print(results)
-
-  if (!dir.exists("evaluation")) dir.create("evaluation")
-  write.csv(results, file = "evaluation/test_metrics.csv", row.names = FALSE)
-  cat("\nResultados guardados en evaluation/test_metrics.csv\n")
+  res_crop <- evaluate_models(models_crop, "crop", crop_result$test, y_test_crop)
+  rm(models_crop); gc()
+  
+  final_results <- rbind(res_pca, res_crop)
+  print(final_results)
+  write.csv(final_results, "evaluation/test_metrics.csv", row.names = FALSE)
 }
 
 main()

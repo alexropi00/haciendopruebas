@@ -13,14 +13,14 @@ library(parallel)
 execute_jobs_with_progress <- function(cl, jobs, worker_fun) {
   total_jobs <- length(jobs)
   if (total_jobs == 0) return(list())
-
+  
   # Barra de progreso básica
   pb <- txtProgressBar(min = 0, max = total_jobs, style = 3)
   start_time <- Sys.time()
-
+  
   results <- vector("list", total_jobs)
   next_job <- 1
-
+  
   # Enviar una tarea por worker al inicio
   for (node in seq_along(cl)) {
     if (next_job <= total_jobs) {
@@ -28,31 +28,31 @@ execute_jobs_with_progress <- function(cl, jobs, worker_fun) {
       next_job <- next_job + 1
     }
   }
-
+  
   completed <- 0
-
+  
   while (completed < total_jobs) {
     res <- parallel:::recvOneResult(cl)
     completed <- completed + 1
     results[[res$tag]] <- res$value
-
+    
     # Actualizar progreso y ETA
     elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
     avg_time <- elapsed / completed
     remaining <- total_jobs - completed
     eta_hours <- (avg_time * remaining) / 3600
-
+    
     setTxtProgressBar(pb, completed)
     cat(sprintf("  [%d/%d] ETA: %.2f horas (%.1f min transcurridos)\n",
                 completed, total_jobs, eta_hours, elapsed / 60))
-
+    
     # Enviar siguiente tarea al mismo nodo si quedan pendientes
     if (next_job <= total_jobs) {
       parallel:::sendCall(cl[[res$node]], worker_fun, list(jobs[[next_job]]), tag = next_job)
       next_job <- next_job + 1
     }
   }
-
+  
   close(pb)
   results
 }
@@ -60,11 +60,11 @@ execute_jobs_with_progress <- function(cl, jobs, worker_fun) {
 # ============================================================================
 # CONFIGURACIÓN
 # ============================================================================
-MAX_CORES <- 10
-SUBSET_PERCENTAGE <- 0.40
+MAX_CORES <- 13
+SUBSET_PERCENTAGE <- 1 # 0.0016
 RF_NTREES <- 50
-MLP_MAX_ITER <- 300
-ENSEMBLE_MAX_ITER <- 200
+MLP_MAX_ITER <- 500
+ENSEMBLE_MAX_ITER <- 400
 
 # Directorio temporal para intercambio de archivos
 TEMP_DIR <- "temp_models_windows"
@@ -122,14 +122,14 @@ worker_wrapper <- function(job) {
   if (!(subset_percentage > 0 && subset_percentage <= 1)) {
     stop(sprintf("subset_percentage debe estar en el rango (0, 1]; valor recibido: %.3f", subset_percentage))
   }
-
+  
   train_idx <- c()
   for (cls in unique(cache$y)) {
     c_idx <- which(cache$y == cls)
     n <- max(2, floor(length(c_idx) * subset_percentage))
     train_idx <- c(train_idx, sample(c_idx, n))
   }
-
+  
   X_sub <- cache$X[train_idx, ]
   y_sub <- as.factor(cache$y[train_idx])
   y_sub_matrix <- class.ind(y_sub) # Matrix mantiene alineación fila-fila con X_sub
@@ -179,7 +179,7 @@ environment(worker_wrapper) <- new.env()
 # GESTOR DE PARALELISMO
 # ============================================================================
 run_parallel_training <- function(dataset_name, dataset_path, subset_percentage = SUBSET_PERCENTAGE) {
-
+  
   if (!(subset_percentage > 0 && subset_percentage <= 1)) {
     stop(sprintf("SUBSET_PERCENTAGE debe estar en el rango (0, 1]; valor recibido: %.3f", subset_percentage))
   }
@@ -188,16 +188,21 @@ run_parallel_training <- function(dataset_name, dataset_path, subset_percentage 
   
   # Configs
   configs <- list(
-    list(type = "mlp", name = "mlp_tiny", hidden = 20, decay = 0.001, max_iter = MLP_MAX_ITER),
-    list(type = "mlp", name = "mlp_small", hidden = 40, decay = 0.001, max_iter = MLP_MAX_ITER),
-    list(type = "mlp", name = "mlp_medium", hidden = 60, decay = 0.001, max_iter = MLP_MAX_ITER),
-    list(type = "mlp", name = "mlp_large", hidden = 80, decay = 0.001, max_iter = MLP_MAX_ITER),
-    list(type = "mlp", name = "mlp_deep", hidden = 100, decay = 0.001, max_iter = MLP_MAX_ITER),
+    list(type = "mlp", name = "mlp_tiny", hidden = 60, decay = 0.001, max_iter = MLP_MAX_ITER),
+    list(type = "mlp", name = "mlp_small", hidden = 80, decay = 0.001, max_iter = MLP_MAX_ITER),
+    list(type = "mlp", name = "mlp_medium", hidden = 100, decay = 0.001, max_iter = MLP_MAX_ITER),
+    list(type = "mlp", name = "mlp_large", hidden = 120, decay = 0.001, max_iter = MLP_MAX_ITER),
+    list(type = "mlp", name = "mlp_xlarge", hidden = 180, decay = 0.001, max_iter = MLP_MAX_ITER),
+    
     list(type = "svm", name = "svm_rad_01", kernel = "radial", cost = 0.1, gamma = NULL),
     list(type = "svm", name = "svm_rad_1", kernel = "radial", cost = 1, gamma = NULL),
     list(type = "svm", name = "svm_rad_5", kernel = "radial", cost = 5, gamma = NULL),
-    list(type = "svm", name = "svm_poly", kernel = "polynomial", cost = 1, gamma = NULL),
-    list(type = "svm", name = "svm_lin", kernel = "linear", cost = 1, gamma = NULL)
+    list(type = "svm", name = "svm_rad_10", kernel = "radial", cost = 10, gamma = NULL),
+    
+    list(type = "svm", name = "svm_poly_01", kernel = "polynomial", cost = 0.1, gamma = NULL),
+    list(type = "svm", name = "svm_poly_1", kernel = "polynomial", cost = 1, gamma = NULL),
+    list(type = "svm", name = "svm_poly_5", kernel = "linear", cost = 5, gamma = NULL),
+    list(type = "svm", name = "svm_poly_10", kernel = "polynomial", cost = 10, gamma = NULL)
   )
   
   # Crear Jobs (Ligeros, solo texto)
@@ -220,7 +225,7 @@ run_parallel_training <- function(dataset_name, dataset_path, subset_percentage 
   on.exit(stopCluster(cl))
   
   cat("Enviando jobs a workers (Environment Cleaned)...\n")
-
+  
   # Ejecutar con Balanceo de Carga mostrando progreso y ETA
   results_meta <- execute_jobs_with_progress(cl, jobs, worker_wrapper)
   
@@ -269,7 +274,7 @@ get_probs <- function(model, X) {
 # ============================================================================
 main <- function(subset_percentage = SUBSET_PERCENTAGE) {
   if (!dir.exists("trained_models")) dir.create("trained_models")
-
+  
   ens_list <- list(
     list(n="ens_mlp", t="mlp"),
     list(n="ens_rf", t="rf"),
@@ -288,7 +293,7 @@ main <- function(subset_percentage = SUBSET_PERCENTAGE) {
   
   successful <- models_pca[sapply(models_pca, function(x) x$success)]
   if(length(successful) >= 3) {
-    selected <- successful[1:min(5, length(successful))]
+    selected <- successful[1:length(successful)]
     set.seed(123)
     idx <- sample(1:nrow(pca_result$train), 5000)
     X_ens <- pca_result$train[idx,]
@@ -322,7 +327,7 @@ main <- function(subset_percentage = SUBSET_PERCENTAGE) {
   
   successful <- models_crop[sapply(models_crop, function(x) x$success)]
   if(length(successful) >= 3) {
-    selected <- successful[1:min(5, length(successful))]
+    selected <- successful[1:length(successful)]
     set.seed(123)
     idx <- sample(1:nrow(crop_result$train), 5000)
     X_ens <- crop_result$train[idx,]
