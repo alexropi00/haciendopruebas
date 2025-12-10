@@ -50,12 +50,12 @@ get_probs_named <- function(model, X, all_levels) {
 
   # Si predict devolvió un vector plano, levantarlo a matriz (columnas = 1)
   n_rows <- nrow(X_df)
-  if (is.null(dim(probs)) && length(probs) == n_rows) {
-    probs <- matrix(probs, ncol = 1)
+  if (length(dim(probs)) == 0 && length(probs) == n_rows) {
+    probs <- matrix(probs, nrow = n_rows, ncol = 1)
   }
 
-  # Alineación de dimensiones
-  if (is.null(nrow(probs)) || nrow(probs) != n_rows) return(NULL)
+  # Alineación de dimensiones: garantizar matriz 2D
+  if (length(dim(probs)) != 2 || nrow(probs) != n_rows) return(NULL)
 
   # Normalizar NAs
   probs[is.na(probs)] <- 0
@@ -65,14 +65,17 @@ get_probs_named <- function(model, X, all_levels) {
   full_probs <- matrix(0, nrow = n_rows, ncol = n_cols)
   colnames(full_probs) <- all_levels
 
-  # Usar nombres de columnas cuando existan; en su defecto, copiar si las dimensiones coinciden
   if (!is.null(colnames(probs))) {
-    available_cols <- intersect(colnames(probs), all_levels)
-    if (length(available_cols) > 0) {
-      full_probs[, available_cols, drop = FALSE] <- probs[, available_cols, drop = FALSE]
+    matched <- match(colnames(probs), all_levels)
+    keep <- which(!is.na(matched))
+    if (length(keep) > 0) {
+      full_probs[, matched[keep], drop = FALSE] <- probs[, keep, drop = FALSE]
     }
   } else if (ncol(probs) == n_cols) {
     full_probs[] <- probs
+  } else {
+    # Sin nombres y con número de columnas distinto: no es utilizable
+    return(NULL)
   }
 
   full_probs
@@ -170,6 +173,10 @@ build_meta_matrix <- function(base_names, models, X_ens, all_levels, cores) {
     if (is.null(res$probs)) next
     if (nrow(res$probs) != nrow(X_meta)) {
       cat(sprintf("\n   [WARN] Dimensiones incompatibles para modelo %s; se omite.\n", base_names[[res$idx]]))
+      next
+    }
+    if (ncol(res$probs) != length(all_levels)) {
+      cat(sprintf("\n   [WARN] Probabilidades incompletas para modelo %s; se omite.\n", base_names[[res$idx]]))
       next
     }
 
